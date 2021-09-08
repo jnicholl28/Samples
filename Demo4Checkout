@@ -1,0 +1,107 @@
+package com.appspot.up.demos.demo4;
+
+import com.appspot.sa.SecureAcceptanceRequest;
+import com.appspot.up.Environment;
+import com.appspot.up.V2KeyProvider;
+import com.appspot.up.tools.Toolbox;
+import io.vertx.core.buffer.Buffer;
+import io.vertx.core.json.JsonObject;
+import io.vertx.ext.web.RoutingContext;
+import io.vertx.ext.web.templ.thymeleaf.ThymeleafTemplateEngine;
+
+import java.util.Base64;
+
+public class Demo4Checkout { // implements Handler<RoutingContext> {
+    private final static String CCR = "com/appspot/up/demos/demo4/capture-context-request.json";
+    private final JsonObject captureContextRequest;
+    private final ThymeleafTemplateEngine thymeleafTemplateEngine;
+
+    public Demo4Checkout(ThymeleafTemplateEngine thymeleafTemplateEngine) {
+        this.thymeleafTemplateEngine = thymeleafTemplateEngine;
+        this.captureContextRequest = new JsonObject(Toolbox.getResourceFileAsString(CCR));
+    }
+
+    public void basic(final RoutingContext routingContext) {
+        final JsonObject copy = captureContextRequest.copy();
+        final JsonObject checkoutApiInitialization = copy.getJsonObject("checkoutApiInitialization");
+        checkoutApiInitialization.put("profile_id", "FA912D86-3453-49E8-A9B4-2DF1CD395087");
+        checkoutApiInitialization.put("access_key", "7f108378a1cb3908a42188457db892cc");
+        checkoutApiInitialization.put("reference_number", "1611305732");
+        checkoutApiInitialization.put("transaction_uuid", "1611305732-001");
+        checkoutApiInitialization.put("transaction_type", "authorization");
+        checkoutApiInitialization.put("currency", "USD");
+        checkoutApiInitialization.put("amount", "100.00");
+        checkoutApiInitialization.put("locale", "en");
+
+        checkoutApiInitialization.put("bill_to_forename", "Joe");
+        checkoutApiInitialization.put("bill_to_surname", "Soap");
+        checkoutApiInitialization.put("bill_to_phone", "07788888888");
+        checkoutApiInitialization.put("bill_to_email", "payer_auth_vi_2.1.0_su@cybersource.com");
+        checkoutApiInitialization.put("bill_to_address_line1", "1 My Apartment");
+        checkoutApiInitialization.put("bill_to_address_line2", "20 My Street");
+        checkoutApiInitialization.put("bill_to_address_city", "San Francisco");
+        checkoutApiInitialization.put("bill_to_address_state", "CA");
+        checkoutApiInitialization.put("bill_to_address_postal_code", "94043");
+        checkoutApiInitialization.put("bill_to_address_country", "US");
+        checkoutApiInitialization.put("override_custom_receipt_page", "https://the-up-demo.appspot.com/demos/demo5/receipt");
+        checkoutApiInitialization.put("unsigned_field_names", "transient_token");
+
+//        SecureAcceptanceRequest secureAcceptanceRequest = new SecureAcceptanceRequest.fromMap(checkoutApiInitialization);
+        handle(routingContext, copy.toString(), "html/demos/demo4/basic/index.html");
+    }
+
+    public void handle(
+            final RoutingContext routingContext,
+            final String captureContextRequest,
+            final String templateFileName
+    ) {
+        final Environment environment = Environment.defaultValue();
+        final var webClient = environment.getWebClient();
+        final var httpRequest = webClient.post("/up/v1/capture-contexts");
+        final var headers = V2KeyProvider.headers(
+                environment.getMid(),
+                environment.getKeyId(),
+                environment.getSharedSecret(),
+                environment.getHost(),
+                "post /up/v1/capture-contexts",
+                captureContextRequest
+        );
+        httpRequest.headers().addAll(headers);
+
+        httpRequest.sendBuffer(Buffer.buffer(captureContextRequest), cccResult -> {
+            if (cccResult.failed()) {
+                routingContext.response().end(cccResult.cause().toString());
+                return;
+            }
+            final int statusCode = cccResult.result().statusCode();
+            if (statusCode != 201) {
+                routingContext.response().headers().set("content-type", "text/plain");
+                routingContext.response().end(cccResult.result().body());
+                return;
+            }
+
+            final var captureContext = cccResult.result().body().toString();
+
+            final var templateData = new JsonObject();
+            templateData.put("captureContext", captureContext);
+            final JsonObject ccAsJson = payload(captureContext);
+            final String clientLibrary = ccAsJson.getJsonArray("ctx").getJsonObject(0).getJsonObject("data").getString("clientLibrary");
+            templateData.put("clientLibrary", clientLibrary);
+
+            thymeleafTemplateEngine.render(templateData, templateFileName, thrResult -> {
+                if (thrResult.failed()) {
+                    routingContext.response().end(thrResult.cause().toString() + ", " + thrResult.cause().getCause());
+                }
+                routingContext.response().end(thrResult.result());
+            });
+        });
+    }
+
+    private JsonObject payload(String jwt) {
+        // nasty way - do not do this at home
+        jwt = jwt.substring(jwt.indexOf('.') + 1);
+        jwt = jwt.substring(0, jwt.indexOf('.'));
+        jwt = new String(Base64.getDecoder().decode(jwt));
+        return new JsonObject(jwt);
+    }
+}
